@@ -148,6 +148,12 @@ struct discovery_config {
 	int check_tls;
 	char check_tls_server_name[256];
 	int check_tls_skip_verify;
+	int meta_http;
+	char meta_http_enabled[5];
+	char meta_http_bindaddr[256];
+	char meta_http_bindport[6];
+	char meta_http_tlsenable[5];
+	char meta_http_tlsbindaddr[256];
 };
 
 static struct discovery_config global_config = {
@@ -162,26 +168,42 @@ static struct discovery_config global_config = {
 	.check_http_port = 8088,
 	.check_tls = 0,
 	.check_tls_server_name = "",
-	.check_tls_skip_verify = 0
+	.check_tls_skip_verify = 0,
+	.meta_http = 0,
+	.meta_http_enabled = "",
+	.meta_http_bindaddr = "",
+	.meta_http_bindport = "",
+	.meta_http_tlsenable = "",
+	.meta_http_tlsbindaddr = ""
 };
 
 static const char config_file[] = "res_consul_discovery.conf";
+static const char http_config_file[] = "http.conf";
 
 struct ast_threadpool *discovery_thread_pool;
 
 /*! \brief Function called to register Asterisk service into Consul */
 static int consul_register(void *userdata)
 {
+	const char meta_http_enabled[] = "http_enabled";
+	const char meta_http_bindaddr[] = "http_bindaddr";
+	const char meta_http_bindport[] = "http_bindport";
+	const char meta_http_tlsenable[] = "http_tlsenable";
+	const char meta_http_tlsbindaddr[] = "http_tlsbindaddr";
+
 	int success;
+
 	struct ast_consul_service_check *checks[2] = { NULL, NULL };
 	const char *tags[2] = { &global_config.tags[0], NULL };
-	const char *meta[3] = { "eid", &global_config.eid[0], NULL };
+	char *meta[13] = { "eid", &global_config.eid[0], NULL };
 
 	struct ast_consul_service_check httpstatus_check;
 	char url_check[512];
-	if (global_config.check == 1) {
-		snprintf(url_check, sizeof(url_check), "%s://%s:%d/httpstatus",
-				 global_config.check_tls ? "https" : "http", global_config.discovery_ip,
+	if (global_config.check) {
+		snprintf(url_check, sizeof(url_check),
+				 "%s://%s:%d/httpstatus",
+				 global_config.check_tls ? "https" : "http",
+				 global_config.discovery_ip,
 				 global_config.check_http_port);
 		httpstatus_check.http = url_check;
 		httpstatus_check.interval = 15;
@@ -191,6 +213,36 @@ static int consul_register(void *userdata)
 		checks[0] = &httpstatus_check;
 	}
 
+	if (global_config.meta_http) {
+		int i = 2;
+		if (strlen(global_config.meta_http_enabled)) {
+			meta[i] = (char *) &meta_http_enabled[0];
+			meta[i + 1] = &global_config.meta_http_enabled[0];
+			i += 2;
+		}
+		if (strlen(global_config.meta_http_bindaddr)) {
+			meta[i] = (char *) &meta_http_bindaddr[0];
+			meta[i + 1] = &global_config.meta_http_bindaddr[0];
+			i += 2;
+		}
+		if (strlen(global_config.meta_http_bindport)) {
+			meta[i] = (char *) &meta_http_bindport[0];
+			meta[i + 1] = &global_config.meta_http_bindport[0];
+			i += 2;
+		}
+		if (strlen(global_config.meta_http_tlsenable)) {
+			meta[i] = (char *) &meta_http_tlsenable[0];
+			meta[i + 1] = &global_config.meta_http_tlsenable[0];
+			i += 2;
+		}
+		if (strlen(global_config.meta_http_tlsbindaddr)) {
+			meta[i] = (char *) &meta_http_tlsbindaddr[0];
+			meta[i + 1] = &global_config.meta_http_tlsbindaddr[0];
+			i += 2;
+		}
+		meta[i] = NULL;
+	}
+
 	while (1) {
 		success = ast_consul_service_register(
 			global_config.id,
@@ -198,7 +250,7 @@ static int consul_register(void *userdata)
 			global_config.discovery_ip,
 			global_config.discovery_port,
 			tags,
-			meta,
+			(const char **) meta,
 			checks
 		);
 
@@ -287,6 +339,40 @@ static int generate_uuid_id_consul(void)
 	return 0;
 }
 
+/*! \brief Function called to load or reload http configuration file */
+static void load_http_config(int reload)
+{
+	struct ast_config *cfg = NULL;
+
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_variable *v;
+
+	if (!(cfg = ast_config_load(http_config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "http configuration file '%s' not found\n", http_config_file);
+		return;
+	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
+		return;
+	}
+
+	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
+		if (!strcasecmp(v->name, "enabled")) {
+			ast_copy_string(global_config.meta_http_enabled, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "bindaddr")) {
+			ast_copy_string(global_config.meta_http_bindaddr, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "bindport")) {
+			ast_copy_string(global_config.meta_http_bindport, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "tlsenable")) {
+			ast_copy_string(global_config.meta_http_tlsenable, v->value, strlen(v->value) + 1);
+		} else if (!strcasecmp(v->name, "tlsbindaddr")) {
+			ast_copy_string(global_config.meta_http_tlsbindaddr, v->value, strlen(v->value) + 1);
+		}
+	}
+
+	ast_config_destroy(cfg);
+
+	return;
+}
+
 /*! \brief Function called to load or reload the configuration file */
 static void load_config(int reload)
 {
@@ -295,12 +381,13 @@ static void load_config(int reload)
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_variable *v;
 
-	int enabled, check, check_tls, check_tls_skip_verify;
+	int enabled, check, check_tls, check_tls_skip_verify, meta_http;
 
 	enabled = 1;
 	check = 1;
 	check_tls = 1;
 	check_tls_skip_verify = 1;
+	meta_http = 1;
 
 	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "res_discovery_consul configuration file '%s' not found\n", config_file);
@@ -356,6 +443,11 @@ static void load_config(int reload)
 				check_tls_skip_verify = 0;
 			}
 			global_config.check_tls_skip_verify = check_tls_skip_verify;
+		} else if (!strcasecmp(v->name, "meta_http")) {
+			if (ast_true(v->value) == 0) {
+				meta_http = 0;
+			}
+			global_config.meta_http = meta_http;
 		}
 	}
 
@@ -376,6 +468,10 @@ static void load_config(int reload)
 	}
 
 	ast_config_destroy(cfg);
+
+	if (global_config.meta_http) {
+		load_http_config(reload);
+	}
 
 	return;
 }
