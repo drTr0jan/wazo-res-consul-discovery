@@ -182,6 +182,13 @@ static const char http_config_file[] = "http.conf";
 
 struct ast_threadpool *discovery_thread_pool;
 
+#define ADD_META(meta, pos, field)						\
+	if (strlen(global_config.meta_##field)) {			\
+		meta[pos] = (char *) &meta_##field[0];			\
+		meta[pos + 1] = &global_config.meta_##field[0];	\
+		pos += 2;										\
+	}
+
 /*! \brief Function called to register Asterisk service into Consul */
 static int consul_register(void *userdata)
 {
@@ -215,31 +222,11 @@ static int consul_register(void *userdata)
 
 	if (global_config.meta_http) {
 		int i = 2;
-		if (strlen(global_config.meta_http_enabled)) {
-			meta[i] = (char *) &meta_http_enabled[0];
-			meta[i + 1] = &global_config.meta_http_enabled[0];
-			i += 2;
-		}
-		if (strlen(global_config.meta_http_bindaddr)) {
-			meta[i] = (char *) &meta_http_bindaddr[0];
-			meta[i + 1] = &global_config.meta_http_bindaddr[0];
-			i += 2;
-		}
-		if (strlen(global_config.meta_http_bindport)) {
-			meta[i] = (char *) &meta_http_bindport[0];
-			meta[i + 1] = &global_config.meta_http_bindport[0];
-			i += 2;
-		}
-		if (strlen(global_config.meta_http_tlsenable)) {
-			meta[i] = (char *) &meta_http_tlsenable[0];
-			meta[i + 1] = &global_config.meta_http_tlsenable[0];
-			i += 2;
-		}
-		if (strlen(global_config.meta_http_tlsbindaddr)) {
-			meta[i] = (char *) &meta_http_tlsbindaddr[0];
-			meta[i + 1] = &global_config.meta_http_tlsbindaddr[0];
-			i += 2;
-		}
+		ADD_META(meta, i, http_enabled);
+		ADD_META(meta, i, http_bindaddr);
+		ADD_META(meta, i, http_bindport);
+		ADD_META(meta, i, http_tlsenable);
+		ADD_META(meta, i, http_tlsbindaddr);
 		meta[i] = NULL;
 	}
 
